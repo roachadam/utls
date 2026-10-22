@@ -928,6 +928,9 @@ type KeySharePrivateKeys struct {
 	Ecdhe      *ecdh.PrivateKey
 	Mlkem      crypto.Decapsulator
 	MlkemEcdhe *ecdh.PrivateKey
+	// AdditionalEcdhe holds the private keys of classical key shares offered
+	// after the first one (Ecdhe), so the server may select any of them.
+	AdditionalEcdhe []*ecdh.PrivateKey
 }
 
 func (ksp *KeySharePrivateKeys) ToPrivate() *keySharePrivateKeys {
@@ -936,9 +939,10 @@ func (ksp *KeySharePrivateKeys) ToPrivate() *keySharePrivateKeys {
 	}
 	return &keySharePrivateKeys{
 		// curveID:    ksp.CurveID,
-		ecdhe:      ksp.Ecdhe,
-		mlkem:      ksp.Mlkem,
-		mlkemEcdhe: ksp.MlkemEcdhe,
+		ecdhe:           ksp.Ecdhe,
+		mlkem:           ksp.Mlkem,
+		mlkemEcdhe:      ksp.MlkemEcdhe,
+		additionalEcdhe: ksp.AdditionalEcdhe,
 	}
 }
 
@@ -948,8 +952,9 @@ func (ksp *keySharePrivateKeys) ToPublic() *KeySharePrivateKeys {
 	}
 	return &KeySharePrivateKeys{
 		// CurveID:    ksp.curveID,
-		Ecdhe:      ksp.ecdhe,
-		Mlkem:      ksp.mlkem,
-		MlkemEcdhe: ksp.mlkemEcdhe,
+		Ecdhe:           ksp.ecdhe,
+		Mlkem:           ksp.mlkem,
+		MlkemEcdhe:      ksp.mlkemEcdhe,
+		AdditionalEcdhe: ksp.additionalEcdhe,
 	}
 }
