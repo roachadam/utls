@@ -187,6 +187,7 @@ func (q *UQUICConn) ConnectionState() ConnectionState {
 }
 
 // SetTransportParameters sets the transport parameters to send to the peer.
+// They replace those of the preset's QUICTransportParametersExtension.
 //
 // Server connections may delay setting the transport parameters until after
 // receiving the client's transport parameters. See QUICTransportParametersRequired.

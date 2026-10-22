@@ -5,6 +5,7 @@
 package tls
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1356,18 +1357,25 @@ func (e *KeyShareExtension) UnmarshalJSON(b []byte) error {
 
 // QUICTransportParametersExtension implements quic_transport_parameters (57).
 //
-// Currently, it works as a fake extension and does not support parsing, since
-// the QUICConn provided by this package does not really understand these
-// parameters.
+// The body is RawData when set, and TransportParameters marshaled otherwise.
+// Write stores a captured body in RawData verbatim, since re-encoding the
+// parameters may change varint widths. On a UQUICConn, the parameters passed to
+// SetTransportParameters replace both: they carry this connection's values,
+// such as initial_source_connection_id.
 type QUICTransportParametersExtension struct {
 	TransportParameters TransportParameters
+	RawData             []byte
 
-	marshalResult []byte // TransportParameters will be marshaled into this slice
+	marshalResult []byte // body, set by Len
 }
 
 func (e *QUICTransportParametersExtension) Len() int {
 	if e.marshalResult == nil {
-		e.marshalResult = e.TransportParameters.Marshal()
+		if e.RawData != nil {
+			e.marshalResult = e.RawData
+		} else {
+			e.marshalResult = e.TransportParameters.Marshal()
+		}
 	}
 	return 4 + len(e.marshalResult)
 }
@@ -1387,9 +1395,19 @@ func (e *QUICTransportParametersExtension) Read(b []byte) (int, error) {
 	return e.Len(), io.EOF
 }
 
-func (e *QUICTransportParametersExtension) writeToUConn(*UConn) error {
-	// no need to set *UConn.quic.transportParams, since it is unused
+func (e *QUICTransportParametersExtension) writeToUConn(uc *UConn) error {
+	if uc.quic != nil && uc.quic.transportParams != nil {
+		e.RawData = uc.quic.transportParams
+		e.marshalResult = nil
+	}
 	return nil
+}
+
+// Write stores a captured quic_transport_parameters body in RawData.
+func (e *QUICTransportParametersExtension) Write(b []byte) (int, error) {
+	e.RawData = bytes.Clone(b)
+	e.marshalResult = nil
+	return len(b), nil
 }
 
 // PSKKeyExchangeModesExtension implements psk_key_exchange_modes (45).
