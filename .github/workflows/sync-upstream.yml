@@ -1,0 +1,110 @@
+# Rebuilds the fork's patch stack on the newest upstream master and, once the
+# tests pass, proposes it as a pull request. Nothing is merged or approved
+# here; see PATCHES.md.
+#
+# Upstream code runs only in the build job, which has a read-only token and no
+# stored credentials. The publish job never runs upstream code: it pushes the
+# branch the build job bundled before testing and opens the pull request.
+name: "Sync upstream"
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sync-upstream
+
+env:
+  BRANCH: sync/upstream
+
+defaults:
+  run:
+    shell: bash # -eo pipefail
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.stack.outputs.changed }}
+      sha256: ${{ steps.stack.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+          cache: false
+      - name: Rebuild patch stack
+        id: stack
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/refraction-networking/utls.git
+          git fetch --no-tags upstream master
+          .fork/sync-upstream.sh origin/main upstream/master "$BRANCH"
+          if git rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null; then
+            git bundle create "$RUNNER_TEMP/sync.bundle" origin/main.."$BRANCH"
+            echo "sha256=$(sha256sum "$RUNNER_TEMP/sync.bundle" | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+          fi
+      # Hashed and uploaded before any upstream code runs. The publish job
+      # rejects a bundle whose hash differs from the one recorded here.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.stack.outputs.changed == 'true'
+        with:
+          name: sync-bundle
+          path: ${{ runner.temp }}/sync.bundle
+          retention-days: 7
+      - name: Vet
+        if: steps.stack.outputs.changed == 'true'
+        run: go vet ./...
+      - name: Test
+        if: steps.stack.outputs.changed == 'true'
+        run: go test -race ./...
+
+  publish:
+    needs: build
+    if: needs.build.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BUNDLE_SHA256: ${{ needs.build.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sync-bundle
+          path: ${{ runner.temp }}
+      - name: Push branch and open pull request
+        run: |
+          # Never change a pull request that is under review.
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
+            echo "::notice::A sync pull request is already open. Merge or close it, then rerun to get a newer sync."
+            exit 0
+          fi
+          echo "$BUNDLE_SHA256  $RUNNER_TEMP/sync.bundle" | sha256sum --check --strict -
+          git bundle verify "$RUNNER_TEMP/sync.bundle"
+          git fetch "$RUNNER_TEMP/sync.bundle" "refs/heads/$BRANCH:refs/heads/$BRANCH"
+          # The tip must be a sync merge on top of main, nothing else.
+          test "$(git rev-parse "$BRANCH^1")" = "$(git rev-parse origin/main)"
+          grep -q '^Upstream-Sync: ' <<<"$(git log -1 --format=%B "$BRANCH")"
+          git push --force origin "$BRANCH"
+          body="$(git log -1 --format=%b "$BRANCH")
+
+          Review the upstream changes before merging. Merge with **Create a merge commit**; squash or rebase loses the stack the next sync starts from."
+          if ! gh pr create --base main --head "$BRANCH" --title "$(git log -1 --format=%s "$BRANCH")" --body "$body"; then
+            echo "::warning::Pushed $BRANCH but could not open the pull request. Open it from https://github.com/${GITHUB_REPOSITORY}/compare/main...$BRANCH"
+          fi
