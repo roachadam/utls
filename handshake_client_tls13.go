@@ -13,7 +13,6 @@ import (
 	"crypto/rsa"
 	"crypto/subtle"
 	"errors"
-	"fmt"
 	"hash"
 	"slices"
 	"time"
@@ -410,18 +409,13 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 				}
 
 				if !cookieFound {
-					// pick a random index where to add cookieExtension
-					// -2 instead of -1 is a lazy way to ensure that PSK is still a last extension
+					// insert the cookie among the permutable extensions, as browsers do
+					lo, hi := cookieSpliceRange(hs.uconn.Extensions)
 					p, err := newPRNG()
 					if err != nil {
 						return err
 					}
-					cookieIndex := p.Intn(len(hs.uconn.Extensions) - 2)
-					if cookieIndex >= len(hs.uconn.Extensions) {
-						// this check is for empty hs.uconn.Extensions
-						return fmt.Errorf("cookieIndex >= len(hs.uconn.Extensions): %v >= %v",
-							cookieIndex, len(hs.uconn.Extensions))
-					}
+					cookieIndex := lo + p.Intn(hi-lo+1)
 					hs.uconn.Extensions = append(hs.uconn.Extensions[:cookieIndex],
 						append([]TLSExtension{&CookieExtension{Cookie: hs.serverHello.cookie}},
 							hs.uconn.Extensions[cookieIndex:]...)...)
