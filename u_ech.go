@@ -9,7 +9,7 @@ import (
 	"math/big"
 	"sync"
 
-	"github.com/refraction-networking/utls/dicttls"
+	"github.com/roachadam/utls/dicttls"
 	"golang.org/x/crypto/cryptobyte"
 )
 

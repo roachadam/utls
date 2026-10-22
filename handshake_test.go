@@ -24,8 +24,8 @@ import (
 	"testing/cryptotest"
 	"time"
 
-	"github.com/refraction-networking/utls/internal/boring"
-	"github.com/refraction-networking/utls/internal/testenv"
+	"github.com/roachadam/utls/internal/boring"
+	"github.com/roachadam/utls/internal/testenv"
 )
 
 // TLS reference tests run a connection against a reference implementation
