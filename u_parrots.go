@@ -3020,15 +3020,9 @@ func utlsIdToSpec(id ClientHelloID) (ClientHelloSpec, error) {
 //
 // This feature was first introduced by Chrome 106.
 func ShuffleChromeTLSExtensions(exts []TLSExtension) []TLSExtension {
-	// unshufCheck checks if the exts[idx] is a GREASE/padding/pre_shared_key extension,
-	// and returns true on success. For these extensions are considered positionally invariant.
+	// GREASE, padding and pre_shared_key are positionally invariant.
 	var skipShuf = func(idx int, exts []TLSExtension) bool {
-		switch exts[idx].(type) {
-		case *UtlsGREASEExtension, *UtlsPaddingExtension, PreSharedKeyExtension:
-			return true
-		default:
-			return false
-		}
+		return positionInvariantExtension(exts[idx])
 	}
 
 	// Shuffle other extensions
