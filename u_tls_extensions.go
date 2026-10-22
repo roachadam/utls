@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/roachadam/utls/dicttls"
@@ -470,7 +471,13 @@ func (e *SignatureAlgorithmsExtension) Write(b []byte) (int, error) {
 }
 
 func (e *SignatureAlgorithmsExtension) writeToUConn(uc *UConn) error {
-	uc.HandshakeState.Hello.SupportedSignatureAlgorithms = e.SupportedSignatureAlgorithms
+	// GREASE goes on the wire (Read writes it) but is never a real candidate.
+	isGREASE := func(s SignatureScheme) bool { return isGREASEUint16(uint16(s)) }
+	algs := e.SupportedSignatureAlgorithms
+	if slices.ContainsFunc(algs, isGREASE) {
+		algs = slices.DeleteFunc(slices.Clone(algs), isGREASE)
+	}
+	uc.HandshakeState.Hello.SupportedSignatureAlgorithms = algs
 	return nil
 }
 
