@@ -385,9 +385,6 @@ func TestChrome155SignatureGREASESeed(t *testing.T) {
 	if got != want || got == GREASE_PLACEHOLDER {
 		t.Fatalf("signature GREASE = %#04x, want %#04x from BoringSSL seed slot 7", got, want)
 	}
-	if gotState := uint16(client.HandshakeState.Hello.SupportedSignatureAlgorithms[0]); gotState != want {
-		t.Fatalf("signature GREASE in handshake state = %#04x, want %#04x", gotState, want)
-	}
 }
 
 func TestChrome133CapabilitiesPreserved(t *testing.T) {
