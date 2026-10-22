@@ -187,6 +187,7 @@ func (q *UQUICConn) ConnectionState() ConnectionState {
 }
 
 // SetTransportParameters sets the transport parameters to send to the peer.
+// They replace those of the preset's QUICTransportParametersExtension.
 //
 // Server connections may delay setting the transport parameters until after
 // receiving the client's transport parameters. See QUICTransportParametersRequired.
@@ -194,14 +195,7 @@ func (q *UQUICConn) SetTransportParameters(params []byte) {
 	if params == nil {
 		params = []byte{}
 	}
-	q.conn.quic.transportParams = params // this won't be used for building ClientHello when using a preset
-
-	// // instead, we set the transport parameters hold by the ClientHello
-	// for _, ext := range q.conn.Extensions {
-	// 	if qtp, ok := ext.(*QUICTransportParametersExtension); ok {
-	// 		qtp.TransportParametersExtData = params
-	// 	}
-	// }
+	q.conn.quic.transportParams = params
 
 	if q.conn.quic.started {
 		<-q.conn.quic.signalc
