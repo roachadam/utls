@@ -185,6 +185,8 @@ func (uconn *UConn) uLoadSession() error {
 			uconn.sessionController.setSessionTicketToUConn()
 		} else {
 			uconn.sessionController.initPskExt(session, earlySecret, binderKey, hello.pskIdentities)
+			// loadSession decided 0-RTT on a copy of the hello.
+			uconn.HandshakeState.Hello.EarlyData = hello.earlyData
 		}
 	}
 
