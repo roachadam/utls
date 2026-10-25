@@ -10,6 +10,7 @@
 | Keep GREASE signature algorithms out of the handshake state | sardanioss/utls `d737ca1` (`writeToUConn` part) | Go's handshake checks treated the GREASE codepoint as an offered algorithm. |
 | Match QUICConn's NextEvent and Close in UQUICConn | MetaCubeX/utls `8853e10` | `Close` hung while the handshake waited for data; failed handshakes produced no `QUICErrorEvent`. |
 | Send the QUIC stack's transport parameters with a preset | sardanioss/utls `5d6b871`, `44b5ea7` | Presets sent the spec's parameters instead of the QUIC stack's; extension 57 could not be parsed from a capture. |
+| Keep 0-RTT on the handshake state when a session is loaded | fork | `loadSession` decided early data on a copy of the hello, so 0-RTT keys were never derived and a resumed QUIC handshake failed when the server accepted early data. |
 | Remove the Go build workflow | fork | Upstream's workflow built and tested on every push and pull request. A tag-triggered pipeline will replace it. |
 
 ## Syncing with upstream
