@@ -560,6 +560,12 @@ func (c *UConn) clientHandshake(ctx context.Context) (err error) {
 		hs13.ctx = ctx
 		// In TLS 1.3, session tickets are delivered after the handshake.
 		err = hs13.handshake()
+		if err == nil {
+			// The deferred restore above then leaves no hello behind.
+			hello = nil
+			c.releaseHandshakeState13(hs13)
+			return nil
+		}
 		if handshakeState := hs13.toPublic13(); handshakeState != nil {
 			c.HandshakeState = *handshakeState
 		}
@@ -602,4 +608,31 @@ func (c *UConn) echTranscriptMsg(outer *clientHelloMsg, echCtx *echClientContext
 	}
 
 	return nil
+}
+
+// releaseHandshakeState13 drops what a successful TLS 1.3 client handshake
+// leaves on the UConn: the ClientHello and ServerHello, the key share
+// private keys (an ML-KEM-768 decapsulation key is ~8 KB), the transcript,
+// the secrets, the extensions the hello was built from and the ECH context
+// (inner hello and transcript). Nothing reads
+// them once the handshake is done: TLS 1.3 never renegotiates, and
+// NewSessionTicket, KeyUpdate, QUIC and ConnectionState use the Conn's own
+// fields. Only the flags describing the handshake stay. TLS 1.2 keeps its
+// state, which a renegotiation rebuilds the hello from.
+//
+// [uTLS fork] crypto/tls frees this state when its handshake returns;
+// upstream uTLS keeps it for the connection's life.
+func (c *UConn) releaseHandshakeState13(hs13 *clientHandshakeStateTLS13) {
+	c.HandshakeState = PubClientHandshakeState{
+		C: c.Conn,
+		State13: TLS13OnlyState{
+			Suite:        hs13.suite.toPublic(),
+			UsingPSK:     hs13.usingPSK,
+			SentDummyCCS: hs13.sentDummyCCS,
+		},
+		uconn: c,
+	}
+	c.Extensions = nil
+	c.ech = nil
+	c.echCtx = nil
 }
