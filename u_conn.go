@@ -422,10 +422,10 @@ func (c *UConn) Write(b []byte) (int, error) {
 			return 0, net.ErrClosed
 		}
 		if c.activeCall.CompareAndSwap(x, x+2) {
-			defer c.activeCall.Add(-2)
 			break
 		}
 	}
+	defer c.activeCall.Add(-2)
 
 	if err := c.Handshake(); err != nil {
 		return 0, err
