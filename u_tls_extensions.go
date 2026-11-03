@@ -1572,6 +1572,11 @@ func (e *SupportedVersionsExtension) UnmarshalJSON(b []byte) error {
 
 // CookieExtension implements cookie (44).
 // MUST NOT be part of initial ClientHello
+//
+// Without a Cookie it is a placeholder that writes nothing: it marks where
+// the cookie of a HelloRetryRequest goes in the second ClientHello, which
+// fills it in. Without a placeholder the cookie goes at a random position
+// among the extensions that are not pinned (see cookieSpliceRange).
 type CookieExtension struct {
 	Cookie []byte
 }
@@ -1581,6 +1586,10 @@ func (e *CookieExtension) writeToUConn(uc *UConn) error {
 }
 
 func (e *CookieExtension) Len() int {
+	if len(e.Cookie) == 0 {
+		// A placeholder: see CookieExtension.
+		return 0
+	}
 	// The total length of the Cookie extension is:
 	// 2 bytes for ExtensionType (extensionCookie)
 	// 2 bytes for OuterExtensionDataLength
@@ -1592,6 +1601,9 @@ func (e *CookieExtension) Len() int {
 
 func (e *CookieExtension) Read(b []byte) (int, error) {
 	cookieLen := len(e.Cookie)
+	if cookieLen == 0 {
+		return 0, io.EOF
+	}
 
 	if len(b) < e.Len() {
 		return 0, io.ErrShortBuffer
