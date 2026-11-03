@@ -128,3 +128,39 @@ func TestHelloRetryCookieShortExtensionList(t *testing.T) {
 		}
 	}
 }
+
+// An empty CookieExtension in the spec marks the cookie's slot: the first
+// ClientHello leaves it out, and the second puts the cookie there every time
+// (Firefox always sends it right after signature_algorithms).
+func TestHelloRetryCookiePlaceholder(t *testing.T) {
+	spec := ClientHelloSpec{
+		TLSVersMin:         VersionTLS13,
+		TLSVersMax:         VersionTLS13,
+		CipherSuites:       []uint16{TLS_AES_128_GCM_SHA256},
+		CompressionMethods: []uint8{compressionNone},
+		Extensions: []TLSExtension{
+			&SNIExtension{},
+			&SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: []SignatureScheme{ECDSAWithP256AndSHA256}},
+			&CookieExtension{},
+			&PSKKeyExchangeModesExtension{Modes: []uint8{PskModeDHE}},
+			&SupportedVersionsExtension{Versions: []uint16{VersionTLS13}},
+			&KeyShareExtension{KeyShares: []KeyShare{{Group: X25519}}},
+		},
+	}
+	for range 20 {
+		// The helper fails on a first ClientHello with an empty cookie.
+		exts := helloRetryWithCookie(t, func(c net.Conn) *UConn {
+			u := UClient(c, &Config{ServerName: "example.com"}, HelloCustom)
+			if err := u.ApplyPreset(spec.clone()); err != nil {
+				t.Fatal(err)
+			}
+			return u
+		})
+		if i := cookieIndex(t, exts); i != 2 {
+			t.Fatalf("cookie at %d, want 2, after signature_algorithms", i)
+		}
+		if n := len(exts); n != len(spec.Extensions) {
+			t.Fatalf("%d extensions in the second ClientHello, want %d: the placeholder filled, none added", n, len(spec.Extensions))
+		}
+	}
+}
