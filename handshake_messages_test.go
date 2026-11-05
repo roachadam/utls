@@ -15,6 +15,8 @@ import (
 	"testing"
 	"testing/quick"
 	"time"
+
+	"golang.org/x/crypto/cryptobyte"
 )
 
 var tests = []handshakeMessage{
@@ -46,6 +48,73 @@ func mustMarshal(t *testing.T, msg handshakeMessage) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+func TestCertificateMsgTLS13TranscriptPreservesReceivedBytes(t *testing.T) {
+	// A Certificate message need not use marshalCertificate's extension order,
+	// and may carry extensions that unmarshalCertificate does not retain.
+	sct := []byte{0, 18, 0, 5, 0, 3, 0, 1, 1}
+	ocsp := []byte{0, 5, 0, 5, 1, 0, 0, 1, 2}
+	unknown := []byte{0xff, 0xa5, 0, 3, 3, 4, 5}
+	for _, test := range []struct {
+		name                   string
+		leafExtensions         []byte
+		intermediateExtensions []byte
+		remarshalDiffers       bool
+	}{
+		{"OCSP before SCT", append(bytes.Clone(ocsp), sct...), nil, false},
+		{"SCT before OCSP", append(bytes.Clone(sct), ocsp...), nil, true},
+		{"unknown leaf extension", unknown, nil, true},
+		{"intermediate extension", nil, sct, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var b cryptobyte.Builder
+			b.AddUint8(typeCertificate)
+			b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
+				b.AddUint8(0) // certificate_request_context
+				b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
+					for i, extensions := range [][]byte{test.leafExtensions, test.intermediateExtensions} {
+						b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
+							b.AddBytes([]byte{byte(i + 1)}) // DER is not parsed by this message.
+						})
+						b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
+							b.AddBytes(extensions)
+						})
+					}
+				})
+			})
+			received, err := b.Bytes()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var msg certificateMsgTLS13
+			if !msg.unmarshal(received) {
+				t.Fatal("failed to unmarshal Certificate")
+			}
+			rebuilt := mustMarshal(t, &msg)
+			if differs := !bytes.Equal(rebuilt, received); differs != test.remarshalDiffers {
+				t.Fatalf("remarshal differs = %v, want %v", differs, test.remarshalDiffers)
+			}
+			// A buffer records the exact bytes supplied to the transcript hash.
+			var transcript bytes.Buffer
+			if err := transcriptMsg(&msg, &transcript); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(transcript.Bytes(), received) {
+				t.Fatalf("transcript uses rebuilt Certificate bytes:\n got %x\nwant %x", transcript.Bytes(), received)
+			}
+		})
+	}
+	t.Run("locally generated Certificate", func(t *testing.T) {
+		msg := &certificateMsgTLS13{certificate: Certificate{Certificate: [][]byte{{1}}}}
+		var transcript bytes.Buffer
+		if err := transcriptMsg(msg, &transcript); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(transcript.Bytes(), mustMarshal(t, msg)) {
+			t.Fatal("locally generated Certificate was not marshalled into the transcript")
+		}
+	})
 }
 
 func TestMarshalUnmarshal(t *testing.T) {
@@ -95,6 +164,8 @@ func TestMarshalUnmarshal(t *testing.T) {
 				case *serverHelloMsg:
 					t.original = nil
 				case *certificateRequestMsgTLS13: // [UTLS]
+					t.original = nil // [UTLS]
+				case *certificateMsgTLS13: // [UTLS]
 					t.original = nil // [UTLS]
 				}
 
