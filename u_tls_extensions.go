@@ -126,12 +126,27 @@ type TLSExtensionJSON interface {
 // SNIExtension implements server_name (0)
 type SNIExtension struct {
 	ServerName string // not an array because go crypto/tls doesn't support multiple SNIs
+
+	// KeepTrailingDot sends an absolute name (one ending in a dot) as it is
+	// given, as Chrome and Firefox do, where crypto/tls strips the dot.
+	// Literal IP addresses still send no server_name.
+	KeepTrailingDot bool
+}
+
+// hostName is the name e sends: ServerName as hostnameInSNI cuts it, or
+// with its trailing dot when KeepTrailingDot is set; "" for none.
+func (e *SNIExtension) hostName() string {
+	hostName := hostnameInSNI(e.ServerName)
+	if e.KeepTrailingDot && hostName != "" {
+		return e.ServerName
+	}
+	return hostName
 }
 
 func (e *SNIExtension) Len() int {
 	// Literal IP addresses, absolute FQDNs, and empty strings are not permitted as SNI values.
-	// See RFC 6066, Section 3.
-	hostName := hostnameInSNI(e.ServerName)
+	// See RFC 6066, Section 3. KeepTrailingDot lets an absolute FQDN through.
+	hostName := e.hostName()
 	if len(hostName) == 0 {
 		return 0
 	}
@@ -140,8 +155,8 @@ func (e *SNIExtension) Len() int {
 
 func (e *SNIExtension) Read(b []byte) (int, error) {
 	// Literal IP addresses, absolute FQDNs, and empty strings are not permitted as SNI values.
-	// See RFC 6066, Section 3.
-	hostName := hostnameInSNI(e.ServerName)
+	// See RFC 6066, Section 3. KeepTrailingDot lets an absolute FQDN through.
+	hostName := e.hostName()
 	if len(hostName) == 0 {
 		return 0, io.EOF
 	}
@@ -206,8 +221,7 @@ func (e *SNIExtension) writeToUConn(uc *UConn) error {
 	if uc.config.EncryptedClientHelloConfigList == nil { // with ech, e.ServerName is the outer public name and should not be copied
 		uc.config.ServerName = e.ServerName
 	}
-	hostName := hostnameInSNI(e.ServerName)
-	uc.HandshakeState.Hello.ServerName = hostName
+	uc.HandshakeState.Hello.ServerName = e.hostName()
 
 	return nil
 }

@@ -3408,7 +3408,7 @@ func generateRandomizedSpec(
 
 	p.CipherSuites = removeRandomCiphers(r, shuffledSuites, id.Weights.CipherSuites_Remove_RandomCiphers)
 
-	sni := SNIExtension{serverName}
+	sni := SNIExtension{ServerName: serverName}
 	sessionTicket := SessionTicketExtension{}
 
 	sigAndHashAlgos := []SignatureScheme{
