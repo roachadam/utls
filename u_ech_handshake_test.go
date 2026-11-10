@@ -307,3 +307,32 @@ func echHandshake(t *testing.T, env *echTestEnv, spec *ClientHelloSpec, prepare 
 	}
 	return result, nil
 }
+
+// TestUTLSECHRejectionVerifyGetsCertificates checks that
+// EncryptedClientHelloRejectionVerify is given the rejecting server's
+// certificate chain, which it exists to check.
+func TestUTLSECHRejectionVerifyGetsCertificates(t *testing.T) {
+	env := newECHTestEnv(t)
+	env.clientConfig.ClientSessionCache = nil
+	otherKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherConfig := marshalECHTestConfig(46, otherKey.PublicKey().Bytes())
+	env.serverConfig.EncryptedClientHelloKeys = []EncryptedClientHelloKey{
+		{Config: otherConfig, PrivateKey: otherKey.Bytes(), SendAsRetry: true},
+	}
+	var peers int
+	env.clientConfig.EncryptedClientHelloRejectionVerify = func(cs ConnectionState) error {
+		peers = len(cs.PeerCertificates)
+		return nil
+	}
+	_, err = echHandshake(t, env, chromeECHOuterSpec(), nil)
+	var rejection *ECHRejectionError
+	if !errors.As(err, &rejection) {
+		t.Fatalf("got %v, want an ECHRejectionError", err)
+	}
+	if peers == 0 {
+		t.Error("EncryptedClientHelloRejectionVerify got no peer certificates")
+	}
+}
