@@ -197,16 +197,21 @@ func (s *sessionController) setSessionTicketToUConn() {
 func (s *sessionController) setPskToUConn() {
 	uAssert(s.pskExtension != nil && (s.state == PskExtInitialized || s.state == PskExtAllSet), "tls: setPskToUConn failed: invalid state")
 	pskCommon := s.pskExtension.GetPreSharedKeyCommon()
+	// [uTLS fork] With an ECHInnerSpec the identities are in
+	// ClientHelloInner, never in the outer hello.
+	inner := s.uconnRef.echInner != nil
 	if s.state == PskExtInitialized {
 		s.uconnRef.HandshakeState.State13.EarlySecret = pskCommon.EarlySecret
 		s.uconnRef.HandshakeState.Session = pskCommon.Session
-		s.uconnRef.HandshakeState.Hello.PskIdentities = pskCommon.Identities
-		s.uconnRef.HandshakeState.Hello.PskBinders = pskCommon.Binders
+		if !inner {
+			s.uconnRef.HandshakeState.Hello.PskIdentities = pskCommon.Identities
+			s.uconnRef.HandshakeState.Hello.PskBinders = pskCommon.Binders
+		}
 	} else if s.state == PskExtAllSet {
 		uAssert(s.uconnRef.HandshakeState.Session == pskCommon.Session && sliceEq(s.uconnRef.HandshakeState.State13.EarlySecret, pskCommon.EarlySecret) &&
-			allTrue(s.uconnRef.HandshakeState.Hello.PskIdentities, func(i int, psk *PskIdentity) bool {
+			(inner || allTrue(s.uconnRef.HandshakeState.Hello.PskIdentities, func(i int, psk *PskIdentity) bool {
 				return pskCommon.Identities[i].ObfuscatedTicketAge == psk.ObfuscatedTicketAge && sliceEq(pskCommon.Identities[i].Label, psk.Label)
-			}), "tls: setPskToUConn failed: only binders are allowed to change on state `PskAllSet`")
+			})), "tls: setPskToUConn failed: only binders are allowed to change on state `PskAllSet`")
 	}
 	s.uconnRef.HandshakeState.State13.BinderKey = pskCommon.BinderKey
 	s.state = PskExtAllSet
@@ -225,6 +230,11 @@ func (s *sessionController) shouldUpdateBinders() bool {
 
 func (s *sessionController) updateBinders() {
 	uAssert(s.shouldUpdateBinders(), "tls: updateBinders failed: shouldn't update binders")
+	if s.uconnRef.echInner != nil {
+		// [uTLS fork] The binders cover ClientHelloInner and were computed
+		// before it was sealed.
+		return
+	}
 	s.pskExtension.PatchBuiltHello(s.uconnRef.HandshakeState.Hello)
 }
 
@@ -269,6 +279,7 @@ func (s *sessionController) syncSessionExts() error {
 	s.assertControllerState("checkSessionExts", NoSession, SessionTicketExtInitialized, PskExtInitialized)
 	numSessionExt := 0
 	hasPskExt := false
+	inner := s.uconnRef.echInner
 	for i, e := range s.uconnRef.Extensions {
 		switch ext := e.(type) {
 		case ISessionTicketExtension:
@@ -283,12 +294,34 @@ func (s *sessionController) syncSessionExts() error {
 			numSessionExt += 1
 		case PreSharedKeyExtension:
 			uAssert(i == len(s.uconnRef.Extensions)-1, "tls: checkSessionExts failed: PreSharedKeyExtension must be the last extension")
+			if inner != nil {
+				// [uTLS fork] The session is resumed in ClientHelloInner; the
+				// outer hello can only carry a stand-in.
+				if _, ok := ext.(*FakePreSharedKeyExtension); !ok {
+					return errECHOuterPSK
+				}
+				ext.SetOmitEmptyPsk(s.uconnRef.config.OmitEmptyPsk)
+				continue
+			}
 			if s.pskExtension == nil {
 				// If there isn't a user-provided psk extension, use the one from the spec
 				s.pskExtension = ext
 			} else {
 				// Otherwise, replace the one in the extension list with the user-provided one
 				s.uconnRef.Extensions[i] = s.pskExtension
+			}
+			s.pskExtension.SetOmitEmptyPsk(s.uconnRef.config.OmitEmptyPsk)
+			hasPskExt = true
+		}
+	}
+	if inner != nil {
+		// applyECHInnerSpec checked that pre_shared_key is last.
+		exts := inner.spec.Extensions
+		if ext, ok := exts[len(exts)-1].(PreSharedKeyExtension); ok {
+			if s.pskExtension == nil {
+				s.pskExtension = ext
+			} else {
+				exts[len(exts)-1] = s.pskExtension
 			}
 			s.pskExtension.SetOmitEmptyPsk(s.uconnRef.config.OmitEmptyPsk)
 			hasPskExt = true

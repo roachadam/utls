@@ -148,3 +148,49 @@ func TestUTLSECHCachedSessionPrivacy(t *testing.T) {
 		})
 	}
 }
+
+// With an ECHInnerSpec the cached session is resumed in ClientHelloInner,
+// with binders over it, and ClientHelloOuter never carries its ticket.
+func TestUTLSECHInnerSpecCachedSessionPrivacy(t *testing.T) {
+	echConfigs, err := hex.DecodeString(utlsTestECHConfigsHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := testConfigClient.Clone()
+	config.ServerName = "private.example"
+	config.InsecureSkipVerify = true
+	config.ClientSessionCache = NewLRUClientSessionCache(1)
+	config.OmitEmptyPsk = true
+	config.EncryptedClientHelloConfigList = echConfigs
+	label := []byte("cached-private-session-ticket")
+	config.ClientSessionCache.Put(config.ServerName, &ClientSessionState{session: &SessionState{
+		version:          VersionTLS13,
+		cipherSuite:      TLS_AES_128_GCM_SHA256,
+		createdAt:        uint64(config.time().Unix()),
+		useBy:            uint64(config.time().Add(time.Hour).Unix()),
+		secret:           bytes.Repeat([]byte{1}, 32),
+		peerCertificates: []*x509.Certificate{testECDSAP256Cert.Leaf},
+		ticket:           label,
+	}})
+	client := UClient(nil, config, HelloCustom)
+	if err := client.ApplyPreset(chromeECHSpec(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.BuildHandshakeState(); err != nil {
+		t.Fatal(err)
+	}
+	outer := new(clientHelloMsg)
+	if !outer.unmarshal(client.HandshakeState.Hello.Raw) {
+		t.Fatal("invalid ClientHelloOuter")
+	}
+	if len(outer.pskIdentities) != 0 || bytes.Contains(outer.original, label) {
+		t.Fatal("ClientHelloOuter carries the cached session")
+	}
+	inner := client.echCtx.innerHello
+	if len(inner.pskIdentities) != 1 || !bytes.Equal(inner.pskIdentities[0].label, label) {
+		t.Fatal("ClientHelloInner does not offer the cached session")
+	}
+	if len(inner.pskBinders) != 1 || len(inner.pskBinders[0]) != 32 || bytes.Equal(inner.pskBinders[0], make([]byte, 32)) {
+		t.Fatal("ClientHelloInner's binder was not computed")
+	}
+}
