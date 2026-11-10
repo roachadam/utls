@@ -57,6 +57,10 @@ type UConn struct {
 
 	// echCtx is the echContex returned by makeClientHello()
 	echCtx *echClientContext
+
+	// echInner is ClientHelloInner when the spec has an ECHInnerSpec and
+	// real ECH is used. [uTLS fork]
+	echInner *echInnerState
 }
 
 // UClient returns a new uTLS client, with behavior depending on clientHelloID.
@@ -174,6 +178,10 @@ func (uconn *UConn) uLoadSession() error {
 		uconn.sessionController.setPskToUConn()
 	case shouldLoad:
 		hello := uconn.HandshakeState.Hello.getPrivatePtr()
+		if uconn.echInner != nil {
+			// [uTLS fork] The session is offered in ClientHelloInner.
+			hello = uconn.echInnerSessionHello()
+		}
 		uconn.sessionController.utlsAboutToLoadSession()
 		session, earlySecret, binderKey, err := uconn.loadSession(hello)
 		if session == nil || err != nil {
@@ -186,7 +194,11 @@ func (uconn *UConn) uLoadSession() error {
 		} else {
 			uconn.sessionController.initPskExt(session, earlySecret, binderKey, hello.pskIdentities)
 			// loadSession decided 0-RTT on a copy of the hello.
-			uconn.HandshakeState.Hello.EarlyData = hello.earlyData
+			if uconn.echInner != nil {
+				uconn.echInner.earlyData = hello.earlyData
+			} else {
+				uconn.HandshakeState.Hello.EarlyData = hello.earlyData
+			}
 		}
 	}
 
@@ -496,19 +508,37 @@ func (uconn *UConn) extensionsList() []uint16 {
 func (uconn *UConn) computeAndUpdateOuterECHExtension(inner *clientHelloMsg, ech *echClientContext, useKey bool) error {
 	// This function is mostly copied from
 	// https://github.com/refraction-networking/utls/blob/e430876b1d82fdf582efc57f3992d448e7ab3d8a/ech.go#L408
-	var encapKey []byte
-	if useKey {
-		encapKey = ech.encapsulatedKey
-	}
-
 	encodedInner, err := encodeInnerClientHelloReorderOuterExts(inner, int(ech.config.MaxNameLength), uconn.extensionsList())
 	if err != nil {
 		return err
 	}
-	ech.encodedInner = bytes.Clone(encodedInner)
+	return uconn.sealOuterECHExtension(bytes.Clone(encodedInner), ech, useKey)
+}
 
-	encryptedLen := len(encodedInner) + 16
-	outerECHExt, err := generateOuterECHExt(ech.config.ConfigID, ech.kdfID, ech.aeadID, encapKey, make([]byte, encryptedLen))
+// sealOuterECHExtension seals encodedInner into the encrypted_client_hello
+// extension of the outer hello, which it marshals. ech keeps encodedInner.
+func (uconn *UConn) sealOuterECHExtension(encodedInner []byte, ech *echClientContext, useKey bool) error {
+	ech.encodedInner = encodedInner
+	if err := uconn.marshalOuterECHPayload(ech, useKey, make([]byte, len(encodedInner)+16)); err != nil {
+		return err
+	}
+	serializedOuter := uconn.HandshakeState.Hello.Raw
+	serializedOuter = serializedOuter[4:]
+	encryptedInner, err := ech.hpkeContext.Seal(serializedOuter, encodedInner)
+	if err != nil {
+		return err
+	}
+	return uconn.marshalOuterECHPayload(ech, useKey, encryptedInner)
+}
+
+// marshalOuterECHPayload marshals the outer hello with payload in its
+// encrypted_client_hello extension.
+func (uconn *UConn) marshalOuterECHPayload(ech *echClientContext, useKey bool, payload []byte) error {
+	var encapKey []byte
+	if useKey {
+		encapKey = ech.encapsulatedKey
+	}
+	outerECHExt, err := generateOuterECHExt(ech.config.ConfigID, ech.kdfID, ech.aeadID, encapKey, payload)
 	if err != nil {
 		return err
 	}
@@ -527,40 +557,19 @@ func (uconn *UConn) computeAndUpdateOuterECHExtension(inner *clientHelloMsg, ech
 		Id:   extensionEncryptedClientHello,
 		Data: outerECHExt,
 	}
-
-	if err := uconn.MarshalClientHelloNoECH(); err != nil {
-		return err
-	}
-
-	serializedOuter := uconn.HandshakeState.Hello.Raw
-	serializedOuter = serializedOuter[4:]
-	encryptedInner, err := ech.hpkeContext.Seal(serializedOuter, encodedInner)
-	if err != nil {
-		return err
-	}
-	outerECHExt, err = generateOuterECHExt(ech.config.ConfigID, ech.kdfID, ech.aeadID, encapKey, encryptedInner)
-	if err != nil {
-		return err
-	}
-	uconn.Extensions[echExtIdx] = &GenericExtension{
-		Id:   extensionEncryptedClientHello,
-		Data: outerECHExt,
-	}
-
-	if err := uconn.MarshalClientHelloNoECH(); err != nil {
-		return err
-	}
-
-	return nil
-
+	return uconn.MarshalClientHelloNoECH()
 }
 
 func (uconn *UConn) MarshalClientHello() error {
 	if len(uconn.config.EncryptedClientHelloConfigList) > 0 {
-		// Real PSKs must only appear in ClientHelloInner. The custom PSK
-		// controller patches binders in the outer hello, so reject this
-		// combination until it supports the inner transcript. GREASE ECH
-		// does not enter this path and can still be combined with PSK.
+		if uconn.echInner != nil {
+			return uconn.marshalECHInnerHello(true)
+		}
+		// Real PSKs must only appear in ClientHelloInner. Without an
+		// ECHInnerSpec the custom PSK controller patches binders in the
+		// outer hello, so reject this combination; an ECHInnerSpec resumes
+		// in ClientHelloInner. GREASE ECH does not enter this path and can
+		// still be combined with PSK.
 		for _, ext := range uconn.Extensions {
 			if psk, ok := ext.(PreSharedKeyExtension); ok && psk.Len() > 0 {
 				return errors.New("tls: PSK resumption with a custom ECH ClientHello is not supported")

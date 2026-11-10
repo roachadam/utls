@@ -194,6 +194,11 @@ type ClientHelloSpec struct {
 	// sessionID may or may not depend on ticket; nil => random
 	GetSessionID func(ticket []byte) [32]byte
 
+	// ECHInner is the ClientHelloInner sent with real Encrypted Client
+	// Hello, when Config.EncryptedClientHelloConfigList is set. nil sends
+	// crypto/tls's default hello. See ECHInnerSpec. [uTLS fork]
+	ECHInner *ECHInnerSpec
+
 	// TLSFingerprintLink string // ?? link to tlsfingerprint.io for informational purposes
 }
 

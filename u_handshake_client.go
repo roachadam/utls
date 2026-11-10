@@ -23,11 +23,11 @@ import (
 // This function is called by (*clientHandshakeStateTLS13).readServerCertificate()
 // to retrieve the certificate out of a message read by (*Conn).readHandshake()
 func (hs *clientHandshakeStateTLS13) utlsReadServerCertificate(msg any) (processedMsg any, err error) {
-	for _, ext := range hs.uconn.Extensions {
+	for _, ext := range hs.uconn.helloExtensions() {
 		switch ext.(type) {
 		case *UtlsCompressCertExtension:
 			// Included Compressed Certificate extension
-			if len(hs.uconn.certCompressionAlgs) > 0 {
+			if len(hs.uconn.helloCertCompressionAlgs()) > 0 {
 				compressedCertMsg, ok := msg.(*utlsCompressedCertificateMsg)
 				if ok {
 					if err = transcriptMsg(compressedCertMsg, hs.transcript); err != nil {
@@ -58,7 +58,7 @@ func (hs *clientHandshakeStateTLS13) decompressCert(m utlsCompressedCertificateM
 
 	// Check to see if the peer responded with an algorithm we advertised.
 	supportedAlg := false
-	for _, alg := range hs.uconn.certCompressionAlgs {
+	for _, alg := range hs.uconn.helloCertCompressionAlgs() {
 		if m.algorithm == uint16(alg) {
 			supportedAlg = true
 		}
@@ -173,6 +173,14 @@ func (hs *clientHandshakeStateTLS13) utlsReadServerParameters(encryptedExtension
 		}
 		if len(hs.uconn.clientProtocol) == 0 {
 			return errors.New("tls: server sent application settings without ALPN")
+		}
+		// [uTLS fork] The ClientHello the server answered must have offered
+		// this codepoint: ClientHelloInner's extensions once ECH is accepted.
+		if !slices.ContainsFunc(hs.uconn.helloExtensions(), func(ext TLSExtension) bool {
+			typ, ok := extensionTypeOf(ext)
+			return ok && typ == hs.c.utls.applicationSettingsCodepoint
+		}) {
+			return errors.New("tls: server sent application settings the ClientHello did not offer")
 		}
 
 		// Check if the ALPN selected by the server exists in the client's list.
@@ -501,10 +509,15 @@ func (c *UConn) clientHandshake(ctx context.Context) (err error) {
 		c.clientSentTicket = true
 	}
 
-	if hello.earlyData {
+	// [uTLS fork] With an ECHInnerSpec, 0-RTT is decided in ClientHelloInner.
+	earlyHello := hello
+	if ech != nil && c.echInner != nil {
+		earlyHello = ech.innerHello
+	}
+	if earlyHello.earlyData {
 		suite := cipherSuiteTLS13ByID(session.cipherSuite)
 		transcript := suite.hash.New()
-		if err := transcriptMsg(hello, transcript); err != nil {
+		if err := transcriptMsg(earlyHello, transcript); err != nil {
 			return err
 		}
 		earlyTrafficSecret := earlySecret.ClientEarlyTrafficSecret(transcript)
@@ -588,6 +601,10 @@ func (c *UConn) clientHandshake(ctx context.Context) (err error) {
 }
 
 func (c *UConn) echTranscriptMsg(outer *clientHelloMsg, echCtx *echClientContext) (err error) {
+	if c.echInner != nil {
+		// [uTLS fork] ClientHelloInner was built as the server reconstructs it.
+		return transcriptMsg(echCtx.innerHello, echCtx.innerTranscript)
+	}
 	// Recreate the inner ClientHello from its compressed form using server's decodeInnerClientHello function.
 	// See https://github.com/refraction-networking/utls/blob/e430876b1d82fdf582efc57f3992d448e7ab3d8a/ech.go#L276-L283
 	encodedInner := echCtx.encodedInner
@@ -635,4 +652,5 @@ func (c *UConn) releaseHandshakeState13(hs13 *clientHandshakeStateTLS13) {
 	c.Extensions = nil
 	c.ech = nil
 	c.echCtx = nil
+	c.echInner = nil
 }
