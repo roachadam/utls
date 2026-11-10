@@ -11,6 +11,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -38,6 +39,32 @@ func TestUTLSECHHelloRetryRequest(t *testing.T) {
 		if !state.ECHAccepted || !state.HelloRetryRequest || state.CurveID != CurveP256 {
 			t.Errorf("unexpected connection state: %+v", state)
 		}
+	}
+}
+
+// When the server rejects ECH and answers the outer hello, the client checks
+// the server's ALPN against the outer hello's, and returns the retry configs.
+func TestUTLSECHRejectedOuterALPN(t *testing.T) {
+	env := newECHTestEnv(t)
+	env.clientConfig.ClientSessionCache = nil
+	otherKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherConfig := marshalECHTestConfig(45, otherKey.PublicKey().Bytes())
+	env.serverConfig.EncryptedClientHelloKeys = []EncryptedClientHelloKey{
+		{Config: otherConfig, PrivateKey: otherKey.Bytes(), SendAsRetry: true},
+	}
+	// uTLS checks the public name's certificate against ServerName unless
+	// EncryptedClientHelloRejectionVerify is set.
+	env.clientConfig.EncryptedClientHelloRejectionVerify = func(ConnectionState) error { return nil }
+	_, err = echHandshake(t, env, chromeECHOuterSpec(), nil)
+	var rejection *ECHRejectionError
+	if !errors.As(err, &rejection) {
+		t.Fatalf("got %v, want an ECHRejectionError", err)
+	}
+	if want := marshalECHTestConfigList(otherConfig); !bytes.Equal(rejection.RetryConfigList, want) {
+		t.Errorf("RetryConfigList = %x, want %x", rejection.RetryConfigList, want)
 	}
 }
 
