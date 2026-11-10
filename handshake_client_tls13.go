@@ -460,7 +460,13 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 		hs.hello.keyShares = hello.keyShares
 		hs.echContext.innerHello = hello
 		if hs.uconn != nil && hs.uconn.clientHelloBuildStatus == BuildByUtls {
-			if err := hs.uconn.computeAndUpdateOuterECHExtension(hs.echContext.innerHello, hs.echContext, false); err != nil {
+			// [uTLS fork] An ECHInnerSpec rebuilds ClientHelloInner from its
+			// extensions.
+			if hs.uconn.echInner != nil {
+				if err := hs.uconn.retryECHInner(hs, chHash); err != nil {
+					return err
+				}
+			} else if err := hs.uconn.computeAndUpdateOuterECHExtension(hs.echContext.innerHello, hs.echContext, false); err != nil {
 				return err
 			}
 

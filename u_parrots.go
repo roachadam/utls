@@ -3091,15 +3091,21 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 	if uconn.config.AlwaysIncludePSK {
 		supportsPSK := uconn.config.MaxVersion >= VersionTLS13
 		if supportsPSK {
+			// [uTLS fork] With an ECHInnerSpec the session is resumed in
+			// ClientHelloInner.
+			pskExts := &p.Extensions
+			if p.ECHInner != nil && len(uconn.config.EncryptedClientHelloConfigList) > 0 {
+				pskExts = &p.ECHInner.Extensions
+			}
 			hasPskExt := false
-			for _, ext := range p.Extensions {
+			for _, ext := range *pskExts {
 				if _, ok := ext.(PreSharedKeyExtension); ok {
 					hasPskExt = true
 				}
 			}
 			if !hasPskExt {
 				// pre_shared_key must be the last extension (RFC 8446, Section 4.2.11).
-				p.Extensions = append(p.Extensions, &UtlsPreSharedKeyExtension{})
+				*pskExts = append(*pskExts, &UtlsPreSharedKeyExtension{})
 			}
 		}
 	}
@@ -3329,6 +3335,10 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 	// The default golang behavior in makeClientHello always sets NextProtoNeg if NextProtos is set,
 	// but NextProtos is also used by ALPN and our spec nmay not actually have a NPN extension
 	hello.NextProtoNeg = haveNPN
+
+	if err := uconn.applyECHInnerSpec(p.ECHInner); err != nil {
+		return err
+	}
 
 	err = uconn.sessionController.syncSessionExts()
 	if err != nil {
