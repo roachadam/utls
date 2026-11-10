@@ -389,7 +389,10 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 			for _, ext := range hs.uconn.Extensions {
 				// new ks seems to be generated either way
 				if ks, ok := ext.(*KeyShareExtension); ok {
-					ks.KeyShares = keyShares(hs.hello.keyShares).ToPublic()
+					// [uTLS fork] hello, not hs.hello: after a HelloRetryRequest
+					// that accepted ECH, the new key share is in
+					// ClientHelloInner, which may compress the outer one.
+					ks.KeyShares = keyShares(hello.keyShares).ToPublic()
 					keyShareExtFound = true
 				}
 			}
