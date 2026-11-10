@@ -1161,6 +1161,9 @@ func (c *Conn) verifyServerCertificate(certificates [][]byte) error {
 	echRejected := c.config.EncryptedClientHelloConfigList != nil && !c.echAccepted
 	if echRejected {
 		if c.config.EncryptedClientHelloRejectionVerify != nil {
+			// [uTLS] The callback checks the public name's certificate:
+			// it needs the chain in the state it is given.
+			c.peerCertificates = certs
 			if err := c.config.EncryptedClientHelloRejectionVerify(c.connectionStateLocked()); err != nil {
 				c.sendAlert(alertBadCertificate)
 				return err
