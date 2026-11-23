@@ -8,8 +8,8 @@ retract (
 )
 
 require (
-	github.com/klauspost/compress v1.20.1
-	github.com/molecule-man/go-brrr v1.2.0
+	github.com/klauspost/compress v1.20.5
+	github.com/molecule-man/go-brrr v1.3.1
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.59.0
 	golang.org/x/sys v0.48.0
