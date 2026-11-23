@@ -658,7 +658,10 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 		expectedVers = VersionTLS12
 	}
 	n := int(hdr[3])<<8 | int(hdr[4])
-	if c.haveVers && vers != expectedVers {
+	// [uTLS] A plaintext record's version is neither authenticated nor hashed
+	// (RFC 8446, section 5.1), and some servers send 0x0301 on the ServerHello
+	// after a HelloRetryRequest. As BoringSSL does, check only its major version.
+	if c.haveVers && vers != expectedVers && (c.in.cipher != nil || vers>>8 != 3) {
 		c.sendAlert(alertProtocolVersion)
 		msg := fmt.Sprintf("received record with version %x when expecting version %x", vers, expectedVers)
 		return c.in.setErrorLocked(c.newRecordHeaderError(nil, msg))
