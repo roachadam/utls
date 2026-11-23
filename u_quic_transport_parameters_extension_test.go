@@ -2,7 +2,6 @@ package tls
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"testing"
@@ -42,63 +41,19 @@ func TestUQUICSendsStackTransportParameters(t *testing.T) {
 				applyPreset()
 			}
 
-			serverConfig := testConfigServer.Clone()
-			serverConfig.NextProtos = []string{"h3"}
-			server := QUICServer(&QUICConfig{TLSConfig: serverConfig})
+			server := newUQUICTestServer()
 			defer server.Close()
 			server.SetTransportParameters(nil)
 
-			if got := runUQUICHandshake(t, client, server); !bytes.Equal(got, stackParams) {
-				t.Fatalf("server received transport parameters %x, want the QUIC stack's %x", got, stackParams)
+			got, err := runUQUICHandshake(t.Context(), client, server)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got[1], stackParams) {
+				t.Fatalf("server received transport parameters %x, want the QUIC stack's %x", got[1], stackParams)
 			}
 		})
 	}
-}
-
-// runUQUICHandshake completes a handshake and returns the transport parameters
-// the server received.
-func runUQUICHandshake(t *testing.T, client *UQUICConn, server *QUICConn) []byte {
-	t.Helper()
-	type endpoint interface {
-		Start(context.Context) error
-		NextEvent() QUICEvent
-		HandleData(QUICEncryptionLevel, []byte) error
-	}
-	endpoints := []endpoint{client, server}
-	for _, e := range endpoints {
-		if err := e.Start(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var serverGot []byte
-	var complete [2]bool
-	for current, idle := 0, 0; idle < 2; {
-		event := endpoints[current].NextEvent()
-		if event.Kind == QUICNoEvent {
-			idle++
-			current = 1 - current
-			continue
-		}
-		idle = 0
-		switch event.Kind {
-		case QUICWriteData:
-			if err := endpoints[1-current].HandleData(event.Level, event.Data); err != nil {
-				t.Fatal(err)
-			}
-		case QUICTransportParameters:
-			if current == 1 {
-				serverGot = bytes.Clone(event.Data)
-			}
-		case QUICHandshakeDone:
-			complete[current] = true
-		case QUICErrorEvent:
-			t.Fatal(event.Err)
-		}
-	}
-	if !complete[0] || !complete[1] {
-		t.Fatalf("handshake incomplete: client=%v server=%v", complete[0], complete[1])
-	}
-	return serverGot
 }
 
 // A captured QUIC ClientHello parses without blunt mimicry, and the transport
